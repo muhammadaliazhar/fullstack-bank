@@ -1,70 +1,81 @@
 pipeline {
     agent any
-    
-    tools{
-        jdk 'jdk17'
-        nodejs 'node16'
-        
+
+    tools {
+        nodejs 'node16'   // Ensure NodeJS 16 is configured in Jenkins Global Tools
     }
-    
-    environment{
-        SCANNER_HOME= tool 'sonar-scanner'
+
+    environment {
+        SCANNER_HOME = tool 'sonar-scanner'
     }
-    
+
     stages {
         stage('Git Checkout') {
             steps {
-                git branch: 'main', url: 'https://github.com/jaiswaladi246/fullstack-bank.git'
+                git branch: 'main', url: 'https://github.com/muhammadaliazhar/fullstack-bank.git'
             }
         }
-        
-        stage('OWASP FS SCAN') {
+
+        stage('OWASP Dependency Check') {
             steps {
-                dependencyCheck additionalArguments: '--scan ./app/backend --disableYarnAudit --disableNodeAudit', odcInstallation: 'DC'
+                withCredentials([string(credentialsId: 'NVD_API_KEY', variable: 'NVD_KEY')]) {
+                    dependencyCheck additionalArguments: "--scan ./app --exclude **/node_modules/** --nvdApiKey=${NVD_KEY} --data /var/lib/jenkins/odc-data --disableYarnAudit", odcInstallation: 'DC'
                     dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
+                }
             }
         }
-        
-        stage('TRIVY FS SCAN') {
+
+        stage('Trivy FS Scanning') {
             steps {
                 sh "trivy fs ."
             }
         }
-        
-        stage('SONARQUBE ANALYSIS') {
+
+        stage('Install Dependencies') {
+            parallel {
+                stage('Backend') {
+                    steps {
+                        dir('app/backend') {
+                            sh "npm ci"
+                        }
+                    }
+                }
+                stage('Frontend') {
+                    steps {
+                        dir('app/frontend') {
+                            sh "npm ci"
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Frontend Build') {
+            steps {
+                dir('app/frontend') {
+                    sh "npm run build"
+                }
+            }
+        }
+
+        stage('SonarQube Scanning') {
             steps {
                 withSonarQubeEnv('sonar') {
-                    sh " $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=Bank -Dsonar.projectKey=Bank "
+                    sh """
+                        ${SCANNER_HOME}/bin/sonar-scanner \
+                        -Dsonar.projectName=Bank \
+                        -Dsonar.projectKey=Bank \
+                        -Dsonar.sources=.
+                    """
                 }
             }
         }
-        
-        
-         stage('Install Dependencies') {
+
+        stage('Deploy to Container') {
             steps {
-                sh "npm install"
-            }
-        }
-        
-        stage('Backend') {
-            steps {
-                dir('/root/.jenkins/workspace/Bank/app/backend') {
-                    sh "npm install"
+                dir('app'){
+                    sh "docker compose up -d"
                 }
-            }
-        }
-        
-        stage('frontend') {
-            steps {
-                dir('/root/.jenkins/workspace/Bank/app/frontend') {
-                    sh "npm install"
-                }
-            }
-        }
-        
-        stage('Deploy to Conatiner') {
-            steps {
-                sh "npm run compose:up -d"
             }
         }
     }
